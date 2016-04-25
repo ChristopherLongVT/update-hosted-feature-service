@@ -14,7 +14,7 @@ The original blog post for ArcGIS 10.1 can be found [here](http://blogs.esri.com
 1. Download the update.py and settings.ini files. (Hint: Click the `Download ZIP` button on the right)
 2. Save these files to your local working directory
 3.  __Note!__ You no longer need to download requests. The script will run using built-in Python modules now!
-4. Update the settings.ini file to values for your service.
+4. Update the FS_File.ini and general.ino files to values for your service. You can see and example of the values in the .png.
 ![App](settings_image.png)
 5. Run the python script
 
@@ -48,6 +48,10 @@ Find a bug or want to request a new feature?  Please let us know by submitting a
 ## Contributing
 
 Esri welcomes contributions from anyone and everyone. Please see our [guidelines for contributing](https://github.com/esri/contributing).
+
+## Contributors
+
+Chesterfield County VA
 
 ## Licensing
 Copyright 2013 Esri

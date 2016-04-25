@@ -1,13 +1,23 @@
-# Update.py - update hosted feature services by replacing the .SD file
-#   and calling publishing (with overwrite) to update the feature service
+﻿# -*- coding: utf-8 -*-
+# -----------------------------------------------------------------------------
+# update.py
+# Created on: 2016-03-23
+# The below code was modified from the original developed by ESRI found here 
+# https://github.com/arcpy/update-hosted-feature-service. Changes were made in 
+# support of Chesterfield County VA's ArcGIS Online implementation. If you have
+# any questions feel free to email CCArcGIS@chesterfield.gov and the current
+# GIS Analyst will respond.
 #
-
+# Description: 
+# This script reads through all the .ini files and updates the services that 
+# go with them.
+# -----------------------------------------------------------------------------
+# Import system modules
 import ConfigParser
 import ast
 import os
 import sys
 import time
-
 import urllib2
 import urllib
 import json
@@ -16,15 +26,45 @@ import gzip
 from io import BytesIO
 import string
 import random
-
+import re
 from xml.etree import ElementTree as ET
+import logging
+import logging.handlers
 import arcpy
+import datetime
 
+# Set the logger name
+loggerName = 'etl.update'
+logger = logging.getLogger(loggerName)
+genFormat = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s','%Y-%m-%d %H:%M')
+
+# Set the name of the log file, you can call this whatever you like.
+logFileName = 'update.log'
+# Set the log file path, the log will created and stored in the same directory that the script resides.
+logFilePath = r'C:\Path\To\Log'
+logFile = os.path.join(logFilePath, logFileName)
+
+# This log handler will output on the console
+streamLogHandler = logging.StreamHandler()
+streamLogHandler.setLevel(logging.DEBUG)
+streamLogHandler.setFormatter(genFormat)
+logger.addHandler(streamLogHandler)
+
+# This log handler will output to the specified log file and
+# will rotate it with two others when it gets to about 5Mb
+rotateLogHandler = logging.handlers.RotatingFileHandler(logFile, mode='a', maxBytes=5000000, backupCount=2)
+rotateLogHandler.setLevel(logging.DEBUG)
+rotateLogHandler.setFormatter(genFormat)
+logger.addHandler(rotateLogHandler)
+
+logger.setLevel(logging.DEBUG)
+
+start = datetime.datetime.now()
 
 class AGOLHandler(object):
 
     def __init__(self, username, password, serviceName, folderName, proxyDict):
-
+        self.logger = logging.getLogger(__name__)
         self.headers = {
             'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
             'User-Agent': ('updatehostedfeatureservice')
@@ -55,7 +95,7 @@ class AGOLHandler(object):
         token_response = self.url_request(token_url, query_dict, 'POST')
 
         if "token" not in token_response:
-            print(token_response['error'])
+            self.logger.info(token_response['error'])
             sys.exit()
         else:
             return token_response['token']
@@ -74,11 +114,11 @@ class AGOLHandler(object):
         jsonResponse = self.url_request(searchURL, query_dict, 'POST')
 
         if jsonResponse['total'] == 0:
-            print("\nCould not find a service to update. Check the service name in the settings.ini")
+            self.logger.info("Could not find a service to update. Check the service name in the settings.ini")
             sys.exit()
         else:
             findid = jsonResponse['results'][0]["id"]
-            print("found {} : {}".format(findType, findid))
+            self.logger.info("found {} : {}".format(findType, findid))
             return findid
 
     def findFolder(self, folderName=None):
@@ -100,8 +140,8 @@ class AGOLHandler(object):
             if folder['title'] == self.folderName:
                 return folder['id']
 
-        print("\nCould not find the specified folder name provided in the settings.ini")
-        print("-- If your content is in the root folder, change the folder name to 'None'")
+        self.logger.info("Could not find the specified folder name provided in the settings.ini")
+        self.logger.info("-- If your content is in the root folder, change the folder name to 'None'")
         sys.exit()
 
     def upload(self, fileName, tags, description):
@@ -138,12 +178,12 @@ class AGOLHandler(object):
                 status = self.item_status(itemPartID)['status']
                 time.sleep(1.5)
 
-            print("updated SD:   {}".format(itemPartID))
+            self.logger.info("updated SD:   {}".format(itemPartID))
             return True
 
         else:
-            print("\n.sd file not uploaded. Check the errors and try again.\n")
-            print(itemPartJSON)
+            self.logger.info(".sd file not uploaded. Check the errors and try again.")
+            self.logger.info(itemPartJSON)
             sys.exit()
 
     def _add_part(self, file_to_upload, item_id, upload_type=None):
@@ -213,7 +253,7 @@ class AGOLHandler(object):
                       'token': self.token}
 
         jsonResponse = self.url_request(publishURL, query_dict, 'POST')
-        print("successfully updated...{}...".format(jsonResponse['services']))
+        self.logger.info("successfully updated...{}...".format(jsonResponse['services']))
 
         return jsonResponse['services'][0]['serviceItemId']
 
@@ -235,7 +275,7 @@ class AGOLHandler(object):
 
         jsonResponse = self.url_request(shareURL, query_dict, 'POST')
 
-        print("successfully shared...{}...".format(jsonResponse['itemId']))
+        self.logger.info("successfully shared...{}...".format(jsonResponse['itemId']))
 
     def url_request(self, in_url, request_parameters, request_type='GET',
                     additional_headers=None, files=None, repeat=0):
@@ -367,7 +407,7 @@ def makeSD(MXD, serviceName, tempDir, outputSD, maxRecords, tags, summary):
             mappingMXD.summary = summary
             mappingMXD.save()
     except IOError:
-        print("IOError on save, do you have the MXD open? Summary/tag info not pushed to MXD, publishing may fail.")
+        logger.info("IOError on save, do you have the MXD open? Summary/tag info not pushed to MXD, publishing may fail...")
 
     arcpy.mapping.CreateMapSDDraft(MXD, SDdraft, serviceName, "MY_HOSTED_SERVICES")
 
@@ -426,82 +466,122 @@ def makeSD(MXD, serviceName, tempDir, outputSD, maxRecords, tags, summary):
     if analysis['errors'] == {}:
         # Stage the service
         arcpy.StageService_server(newSDdraft, outputSD)
-        print("Created {}".format(outputSD))
+        logger.info("Created {}...".format(outputSD))
 
     else:
         # If the sddraft analysis contained errors, display them and quit.
-        print("Errors in analyze: \n {}".format(analysis['errors']))
+        logger.info("Errors in analyze: \n {}...".format(analysis['errors']))
         sys.exit()
 
+# The below function is the portion that starts to differ from the version made avalible at
+# https://github.com/arcpy/update-hosted-feature-service you can see we gather a list of all the 
+# FS_ServiceName.ini files in the directory you store them in. That list is used to update the
+# Feature Service of each .ini file that is found. This seems to be a good way to do it because you
+# can add or remove feature services and .ini file's as you need to without having to change your
+# script.
 
-if __name__ == "__main__":
-    #
-    # start
+def UpdateServiceDefinitionFile(localPath, inputUsername, inputPswd, proxyDict, iniFileLocation):
+        
+    FS_Files = [f for f in os.listdir(iniFileLocation) if re.match(r'[FS_]+.*\.ini', f)]
+    FS_config = ConfigParser.ConfigParser()
+    for ini_file in FS_Files:
+        FS_config.read(ini_file)
+        serviceName = FS_config.get('FS_INFO', 'SERVICENAME')
+        folderName = FS_config.get('FS_INFO', 'FOLDERNAME')
+        MXD = FS_config.get('FS_INFO', 'MXD')
+        tags = FS_config.get('FS_INFO', 'TAGS')
+        summary = FS_config.get('FS_INFO', 'DESCRIPTION')
+        maxRecords = FS_config.get('FS_INFO', 'MAXRECORDS')
+        orgs = FS_config.get('FS_SHARE', 'ORG')
+        shared = FS_config.get('FS_SHARE', 'SHARE')
+        everyone = FS_config.get('FS_SHARE', 'EVERYONE')
+        groups = FS_config.get('FS_SHARE', 'GROUPS')  # Groups are by ID. Multiple groups comma separated
 
-    print("Starting Feature Service publish process")
+        # create a temp directory under the script
+        tempDir = os.path.join(localPath, "tempDir")
+        if not os.path.isdir(tempDir):
+            os.mkdir(tempDir)
+        finalSD = os.path.join(tempDir, serviceName + ".sd")
 
-    # Find and gather settings from the ini file
-    localPath = sys.path[0]
-    settingsFile = os.path.join(localPath, "settings.ini")
+        # initialize AGOLHandler class
+        agol = AGOLHandler(inputUsername, inputPswd, serviceName, folderName, proxyDict)
 
-    if os.path.isfile(settingsFile):
-        config = ConfigParser.ConfigParser()
-        config.read(settingsFile)
-    else:
-        print("INI file not found. \nMake sure a valid 'settings.ini' file exists in the same directory as this script.")
-        sys.exit()
+        # Turn map document into .SD file for uploading
+        makeSD(MXD, serviceName, tempDir, finalSD, maxRecords, tags, summary)
 
-    # AGOL Credentials
-    inputUsername = config.get('AGOL', 'USER')
-    inputPswd = config.get('AGOL', 'PASS')
+        # overwrite the existing .SD on arcgis.com
+        if agol.upload(finalSD, tags, summary):
 
-    # FS values
-    MXD = config.get('FS_INFO', 'MXD')
-    serviceName = config.get('FS_INFO', 'SERVICENAME')
-    folderName = config.get('FS_INFO', 'FOLDERNAME')
-    tags = config.get('FS_INFO', 'TAGS')
-    summary = config.get('FS_INFO', 'DESCRIPTION')
-    maxRecords = config.get('FS_INFO', 'MAXRECORDS')
+            # publish the sd which was just uploaded
+            fsID = agol.publish()
 
-    # Share FS to: everyone, org, groups
-    shared = config.get('FS_SHARE', 'SHARE')
-    everyone = config.get('FS_SHARE', 'EVERYONE')
-    orgs = config.get('FS_SHARE', 'ORG')
-    groups = config.get('FS_SHARE', 'GROUPS')  # Groups are by ID. Multiple groups comma separated
+            # share the item
+            if ast.literal_eval(shared):
+                agol.enableSharing(fsID, everyone, orgs, groups)
 
-    use_prxy = config.get('PROXY', 'USEPROXY')
-    pxy_srvr = config.get('PROXY', 'SERVER')
-    pxy_port = config.get('PROXY', 'PORT')
-    pxy_user = config.get('PROXY', 'USER')
-    pxy_pass = config.get('PROXY', 'PASS')
+# Here is where the actual processing begins to take place.
+try:
+    if __name__ == "__main__":
+        logger.info("Starting the Service update process...")
+        # Find and gather settings from the ini files
+        localPath = sys.path[0]
+        generalFile = os.path.join(localPath, "general.ini")
 
-    proxyDict = {}
-    if ast.literal_eval(use_prxy):
-        http_proxy = "http://" + pxy_user + ":" + pxy_pass + "@" + pxy_srvr + ":" + pxy_port
-        https_proxy = "http://" + pxy_user + ":" + pxy_pass + "@" + pxy_srvr + ":" + pxy_port
-        ftp_proxy = "http://" + pxy_user + ":" + pxy_pass + "@" + pxy_srvr + ":" + pxy_port
-        proxyDict = {"http": http_proxy, "https": https_proxy, "ftp": ftp_proxy}
+        # Creating the General Config parser to read the general.ini
+        logger.info("Creating the general config parser...")
+        if os.path.isfile(generalFile):
+            General_config = ConfigParser.ConfigParser()
+            General_config.read(generalFile)
+        else:
+            logger.info("INI file not found. \nMake sure a valid 'settings.ini' file exists in the same directory as this script...")
+            sys.exit()
 
-    # create a temp directory under the script
-    tempDir = os.path.join(localPath, "tempDir")
-    if not os.path.isdir(tempDir):
-        os.mkdir(tempDir)
-    finalSD = os.path.join(tempDir, serviceName + ".sd")
+        # AGOL Credentials
+        inputUsername = General_config.get('AGOL', 'USER')
+        inputPswd = General_config.get('AGOL', 'PASS')
+        use_prxy = General_config.get('PROXY', 'USEPROXY')
+        pxy_srvr = General_config.get('PROXY', 'SERVER')
+        pxy_port = General_config.get('PROXY', 'PORT')
+        pxy_user = General_config.get('PROXY', 'USER')
+        pxy_pass = General_config.get('PROXY', 'PASS')
 
-    # initialize AGOLHandler class
-    agol = AGOLHandler(inputUsername, inputPswd, serviceName, folderName, proxyDict)
+        proxyDict = {}
+        if ast.literal_eval(use_prxy):
+            http_proxy = "http://" + pxy_user + ":" + pxy_pass + "@" + pxy_srvr + ":" + pxy_port
+            https_proxy = "http://" + pxy_user + ":" + pxy_pass + "@" + pxy_srvr + ":" + pxy_port
+            ftp_proxy = "http://" + pxy_user + ":" + pxy_pass + "@" + pxy_srvr + ":" + pxy_port
+            proxyDict = {"http": http_proxy, "https": https_proxy, "ftp": ftp_proxy}
+        
+        # You will need to change this directory to point to your FS_FeatureService.ini files
+        iniFileLocation = r"C:\Path\To\FS_INI\Files"
 
-    # Turn map document into .SD file for uploading
-    makeSD(MXD, serviceName, tempDir, finalSD, maxRecords, tags, summary)
+        # This is the portion that actually looks at the .mxd creates the new sd file and uploads the sd file to ArcGIS Online
+        # This is also the function from above
+        logger.info("Performing the SD file creation and update in ArcGIS Online")
+        UpdateServiceDefinitionFile(localPath, inputUsername, inputPswd, proxyDict, iniFileLocation)
 
-    # overwrite the existing .SD on arcgis.com
-    if agol.upload(finalSD, tags, summary):
+        logger.info("Finished...")
 
-        # publish the sd which was just uploaded
-        fsID = agol.publish()
-
-        # share the item
-        if ast.literal_eval(shared):
-            agol.enableSharing(fsID, everyone, orgs, groups)
-
-        print("\nfinished.")
+# Handle arcpy errors
+except arcpy.ExecuteError:
+    msgs = arcpy.GetMessages(2)
+    logger.exception(msgs)
+    raise
+except:
+    tb = sys.exc_info()[2]
+    tbinfo = traceback.format_tb(tb)[0]
+    pymsg = "PYTHON ERRORS:\nTraceback info:\n" + tbinfo + "\nError Info:\n" + str(sys.exc_info()[1])
+    msgs = "ArcPy ERRORS:\n" + arcpy.GetMessages(2) + "\n"
+    if tbinfo:
+        logger.exception(pymsg + "\n")
+    if arcpy.GetMessages(2):
+        logger.exception(msgs)
+    raise
+finally:
+    end = datetime.datetime.now()
+    total = end - start
+    days = total.days
+    hours = divmod(total.seconds, 3600)
+    minutes = divmod(hours[1], 60)
+    seconds = minutes[1]
+    logger.info('Processing took {0} days, {1} hours, {2} minutes and {3} seconds.'.format(days, hours[0], minutes[0], seconds))
